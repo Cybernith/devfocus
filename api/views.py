@@ -1,5 +1,7 @@
 from datetime import date
-
+from django.db import models
+from django.http import StreamingHttpResponse, HttpResponse
+from django.views import View
 import httpx
 from asgiref.sync import sync_to_async
 from django.utils import timezone
@@ -8,8 +10,11 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from api.models import ReportRequest
 from core.helper import csv_response
-from core.models import Task, DevSession, SessionTask, ContextSwitch, ResourceLink, GeneratedReport
+from core.integrations import GitHubImporter, GitHubIntegrationError
+from core.models import Task, DevSession, SessionTask, ContextSwitch, ResourceLink, GeneratedReport, Team, \
+    TeamMembership, Insight
 from core.services import SessionService, ReportService
 from api.serializers import (
     TaskSerializer,
@@ -19,8 +24,9 @@ from api.serializers import (
     SessionTaskSerializer,
     ContextSwitchSerializer,
     ResourceLinkSerializer,
-    GeneratedReportSerializer,
+    GeneratedReportSerializer, TeamSerializer, TeamMembershipSerializer, ReportRequestSerializer, InsightSerializer,
 )
+from core.tasks import process_report_request
 
 
 class IsOwner(permissions.BasePermission):
@@ -69,6 +75,29 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         fieldnames = ['id', 'title', 'type', 'priority', 'external_id', 'created_at', 'updated_at']
         return csv_response('tasks.csv', fieldnames, serializer.data)
+
+    @action(detail=False, methods=['post'])
+    async def import_github(self, request):
+        owner = request.data.get('owner')
+        repo = request.data.get('repo')
+        team_id = request.data.get('team_id')
+
+        if not owner or not repo:
+            return Response({"detail": "owner and repo are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        team = None
+        if team_id:
+            try:
+                team = Team.objects.get(pk=team_id)
+            except Team.DoesNotExist:
+                return Response({"detail": "team not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            tasks = await GitHubImporter.import_issues_for_repo(owner, repo, team=team)
+        except GitHubIntegrationError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(TaskSerializer(tasks, many=True).data, status=status.HTTP_201_CREATED)
 
 
 class DevSessionViewSet(viewsets.ModelViewSet):
@@ -193,10 +222,6 @@ class GeneratedReportViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class DailyReportView(APIView):
-    """
-    Sync view – uses domain service ReportService to compute daily report.
-    """
-
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -233,3 +258,65 @@ class AsyncDailyReportView(APIView):
         data["external"] = external_data
 
         return Response(data, status=status.HTTP_201_CREATED)
+
+
+class TeamViewSet(viewsets.ModelViewSet):
+    serializer_class = TeamSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Team.objects.filter(
+            models.Q(owner=self.request.user) |
+            models.Q(members=self.request.user)
+        ).distinct()
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+
+    @action(detail=True, methods=['get'])
+    def members(self, request, pk=None):
+        team = self.get_object()
+        memberships = TeamMembership.objects.filter(team=team).select_related('user')
+        return Response(TeamMembershipSerializer(memberships, many=True).data)
+
+
+class ReportRequestViewSet(viewsets.ModelViewSet):
+    serializer_class = ReportRequestSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return ReportRequest.objects.filter(user=self.request.user).order_by('-created_at')
+
+    def perform_create(self, serializer):
+        req = serializer.save(user=self.request.user)
+        process_report_request.delay(req.id)
+
+
+class InsightViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = InsightSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Insight.objects.filter(user=self.request.user).order_by('-created_at')
+
+
+class EventStreamView(View):
+
+    def get(self, request):
+        user = request.user
+        if not user.is_authenticated:
+            return HttpResponse(status=401)
+
+        def event_stream():
+            reports = GeneratedReport.objects.filter(user=user).order_by('-created_at')[:5]
+            insights = Insight.objects.filter(user=user).order_by('-created_at')[:5]
+
+            yield 'event: reports\n'
+            yield f'data: {GeneratedReportSerializer(reports, many=True).data}\n\n'
+
+            yield 'event: insights\n'
+            yield f'data: {InsightSerializer(insights, many=True).data}\n\n'
+
+        response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache'
+        return response

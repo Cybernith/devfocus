@@ -3,6 +3,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = 'change-me-in-production'
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'
 DEBUG = True
 
 ALLOWED_HOSTS = []
@@ -28,6 +30,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 
+    'devfocus.middleware.ApiRequestLoggingMiddleware',
     'devfocus.middleware.DevSessionMiddleware',
 ]
 

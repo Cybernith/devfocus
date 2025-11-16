@@ -4,7 +4,42 @@ from datetime import timedelta
 from django.db.models import Count
 from django.utils import timezone
 
-from core.models import DevSession, GeneratedReport
+from core.models import DevSession, GeneratedReport, Insight
+
+
+class InsightService:
+    @staticmethod
+    def generate_for_report(report: GeneratedReport) -> list[Insight]:
+        user = report.user
+        payload = report.payload
+        sessions = payload.get('sessions', [])
+
+        insights: list[Insight] = []
+
+        total_switches = sum(s.get('switch_count', 0) for s in sessions)
+        total_focus = sum(s.get('total_focus_minutes', 0) for s in sessions)
+
+        if total_switches > 10:
+            insights.append(Insight.objects.create(
+                user=user,
+                report=report,
+                code='HIGH_CONTEXT_SWITCHING',
+                level=Insight.LEVEL_WARN,
+                message='High context switching detected; consider reducing parallel tasks.',
+                meta={'total_switches': total_switches},
+            ))
+
+        if total_focus < 60:
+            insights.append(Insight.objects.create(
+                user=user,
+                report=report,
+                code='LOW_FOCUS_TIME',
+                level=Insight.LEVEL_INFO,
+                message='Low focused coding time today; maybe schedule a longer deep-work block.',
+                meta={'total_focus_minutes': total_focus},
+            ))
+
+        return insights
 
 
 @dataclass
@@ -71,4 +106,5 @@ class ReportService:
             type=GeneratedReport.TYPE_DAILY,
             payload=payload,
         )
+        InsightService.generate_for_report(report)
         return report

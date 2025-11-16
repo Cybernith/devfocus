@@ -11,6 +11,49 @@ class TimeStampedModel(models.Model):
         abstract = True
 
 
+class Team(TimeStampedModel):
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=255, unique=True)
+    owner = models.ForeignKey(
+        AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='owned_teams',
+    )
+
+    members = models.ManyToManyField(
+        AUTH_USER_MODEL,
+        through='TeamMembership',
+        related_name='teams',
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class TeamMembership(TimeStampedModel):
+    ROLE_OWNER = 'OWNER'
+    ROLE_ADMIN = 'ADMIN'
+    ROLE_MEMBER = 'MEMBER'
+    ROLE_VIEWER = 'VIEWER'
+
+    ROLE_CHOICES = [
+        (ROLE_OWNER, 'Owner'),
+        (ROLE_ADMIN, 'Admin'),
+        (ROLE_MEMBER, 'Member'),
+        (ROLE_VIEWER, 'Viewer'),
+    ]
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='memberships')
+    user = models.ForeignKey(AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='memberships')
+    role = models.CharField(max_length=16, choices=ROLE_CHOICES, default=ROLE_MEMBER)
+
+    class Meta:
+        unique_together = ('team', 'user')
+
+    def __str__(self):
+        return f"{self.user} @ {self.team} ({self.role})"
+
+
 class Task(TimeStampedModel):
     TYPE_BUG = 'BUG'
     TYPE_FEATURE = 'FEATURE'
@@ -32,9 +75,24 @@ class Task(TimeStampedModel):
         (PRIORITY_HIGH, 'High'),
     ]
 
+    SOURCE_GITHUB = 'GITHUB'
+    SOURCE_JIRA = 'JIRA'
+    SOURCE_MANUAL = 'MANUAL'
+
+    SOURCE_CHOICES = [
+        (SOURCE_GITHUB, 'GitHub'),
+        (SOURCE_JIRA, 'Jira'),
+        (SOURCE_MANUAL, 'Manual'),
+    ]
+
+    team = models.ForeignKey(Team, null=True, blank=True, on_delete=models.SET_NULL, related_name='tasks')
+
+    external_id = models.CharField(max_length=128, blank=True, null=True)
+    external_source = models.CharField(max_length=16, choices=SOURCE_CHOICES, default=SOURCE_MANUAL)
+    external_url = models.URLField(blank=True, null=True)
+
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    external_id = models.CharField(max_length=128, blank=True, null=True)
     type = models.CharField(max_length=16, choices=TYPE_CHOICES, default=TYPE_FEATURE)
     priority = models.CharField(max_length=8, choices=PRIORITY_CHOICES, default=PRIORITY_MEDIUM)
 
@@ -54,6 +112,9 @@ class DevSession(TimeStampedModel):
     ]
 
     user = models.ForeignKey(AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='dev_sessions')
+    tasks = models.ManyToManyField(Task, through='SessionTask', related_name='sessions')
+    team = models.ForeignKey(Team, null=True, blank=True, on_delete=models.SET_NULL, related_name='dev_sessions')
+
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
 
@@ -64,8 +125,6 @@ class DevSession(TimeStampedModel):
     switch_count = models.PositiveIntegerField(default=0)
     last_switch_at = models.DateTimeField(blank=True, null=True)
     total_focus_minutes = models.PositiveIntegerField(default=0)
-
-    tasks = models.ManyToManyField(Task, through='SessionTask', related_name='sessions')
 
     def __str__(self) -> str:
         return f"{self.title} ({self.get_status_display()})"
@@ -161,7 +220,30 @@ class GeneratedReport(TimeStampedModel):
     dev_session = models.ForeignKey(DevSession, null=True, blank=True,
                                     on_delete=models.CASCADE, related_name='generated_reports')
     type = models.CharField(max_length=16, choices=TYPE_CHOICES)
-    payload = models.JSONField()  # summary, metrics, etc.
+    payload = models.JSONField()
 
     def __str__(self):
         return f"{self.type} report #{self.pk} for {self.user}"
+
+
+class Insight(TimeStampedModel):
+    LEVEL_INFO = 'INFO'
+    LEVEL_WARN = 'WARN'
+
+    LEVEL_CHOICES = [
+        (LEVEL_INFO, 'Info'),
+        (LEVEL_WARN, 'Warning'),
+    ]
+
+    user = models.ForeignKey(AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='insights')
+    dev_session = models.ForeignKey(DevSession, null=True, blank=True, on_delete=models.CASCADE, related_name='insights')
+    report = models.ForeignKey(GeneratedReport, null=True, blank=True, on_delete=models.CASCADE, related_name='insights')
+
+    code = models.CharField(max_length=64)
+    level = models.CharField(max_length=16, choices=LEVEL_CHOICES, default=LEVEL_INFO)
+    message = models.TextField()
+    meta = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"{self.code} ({self.level})"
+

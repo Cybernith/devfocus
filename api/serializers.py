@@ -1,7 +1,9 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from core.models import Task, DevSession, SessionTask, ContextSwitch, ResourceLink, GeneratedReport
+from api.models import ReportRequest
+from core.models import Task, DevSession, SessionTask, ContextSwitch, ResourceLink, GeneratedReport, Team, \
+    TeamMembership, Insight
 
 User = get_user_model()
 
@@ -69,3 +71,37 @@ class GeneratedReportSerializer(serializers.ModelSerializer):
     class Meta:
         model = GeneratedReport
         fields = ['id', 'type', 'payload', 'created_at']
+
+
+class TeamSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Team
+        fields = ['id', 'name', 'slug', 'owner', 'created_at', 'updated_at']
+        read_only_fields = ['owner']
+
+
+class TeamMembershipSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TeamMembership
+        fields = ['id', 'team', 'user', 'role', 'created_at', 'updated_at']
+
+
+class ReportRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReportRequest
+        fields = [
+            'id', 'type', 'day',
+            'status', 'error_message',
+            'result_report', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['status', 'error_message', 'result_report']
+
+
+class InsightSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Insight
+        fields = [
+            'id', 'code', 'level', 'message',
+            'meta', 'dev_session', 'report',
+            'created_at',
+        ]
