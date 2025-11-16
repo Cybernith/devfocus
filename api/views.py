@@ -8,6 +8,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.helper import csv_response
 from core.models import Task, DevSession, SessionTask, ContextSwitch, ResourceLink, GeneratedReport
 from core.services import SessionService, ReportService
 from api.serializers import (
@@ -35,14 +36,81 @@ class TaskViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Task.objects.all().order_by('-created_at')
+        qs = Task.objects.all().order_by('-created_at')
+
+        type_ = self.request.query_params.get('type')
+        priority = self.request.query_params.get('priority')
+        search = self.request.query_params.get('search')
+
+        if type_:
+            qs = qs.filter(type=type_)
+        if priority:
+            qs = qs.filter(priority=priority)
+        if search:
+            qs = qs.filter(title__icontains=search)
+
+        ordering = self.request.query_params.get('ordering')
+        allowed = {'created_at', 'updated_at', 'priority', 'title'}
+        if ordering:
+            field = ordering.lstrip('-')
+            if field in allowed:
+                qs = qs.order_by(ordering)
+
+        return qs
+
+    @action(detail=False, methods=['get'])
+    def export(self, request):
+        fmt = request.query_params.get('format', 'csv').lower()
+        qs = self.get_queryset()
+        serializer = self.get_serializer(qs, many=True)
+
+        if fmt == 'json':
+            return Response(serializer.data)
+
+        fieldnames = ['id', 'title', 'type', 'priority', 'external_id', 'created_at', 'updated_at']
+        return csv_response('tasks.csv', fieldnames, serializer.data)
 
 
 class DevSessionViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsOwner]
 
     def get_queryset(self):
-        return DevSession.objects.filter(user=self.request.user).order_by('-created_at')
+        qs = DevSession.objects.filter(user=self.request.user)
+
+        status_param = self.request.query_params.get('status')
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        title_search = self.request.query_params.get('search')
+
+        if status_param:
+            qs = qs.filter(status=status_param)
+
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+
+        if title_search:
+            qs = qs.filter(title__icontains=title_search)
+
+        ordering = self.request.query_params.get('ordering')
+        allowed = {
+            'created_at',
+            'updated_at',
+            'started_at',
+            'ended_at',
+            'switch_count',
+            'total_focus_minutes',
+        }
+        if ordering:
+            field = ordering.lstrip('-')
+            if field in allowed:
+                qs = qs.order_by(ordering)
+        else:
+            qs = qs.order_by('-created_at')
+
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -79,6 +147,23 @@ class DevSessionViewSet(viewsets.ModelViewSet):
             st.save(update_fields=['role', 'updated_at'])
 
         return Response(SessionTaskSerializer(st).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'])
+    def export(self, request):
+        fmt = request.query_params.get('format', 'csv').lower()
+        qs = self.get_queryset()
+        serializer = DevSessionSerializer(qs, many=True)
+
+        if fmt == 'json':
+            return Response(serializer.data)
+
+        fieldnames = [
+            'id', 'title', 'status',
+            'started_at', 'ended_at',
+            'switch_count', 'total_focus_minutes',
+            'created_at', 'updated_at',
+        ]
+        return csv_response('sessions.csv', fieldnames, serializer.data)
 
 
 class ContextSwitchViewSet(viewsets.ModelViewSet):
