@@ -1,6 +1,6 @@
 # 🚀 **DevFocus - Developer Context Intelligence Engine**
 
-### *A full–scale, production‑grade backend architecture made public — because my real projects are private.* 🔒🔥
+### *A full–scale, production‑grade backend architecture made public - because my real projects are private.* 🔒🔥
 
 ---
 
