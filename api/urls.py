@@ -22,7 +22,7 @@ router.register(r'report-requests', ReportRequestViewSet, basename='report-reque
 router.register(r'insights', InsightViewSet, basename='insight')
 
 urlpatterns = [
-    re_path(r"^", include(router.urls)),
+    re_path(r"^ ", include(router.urls)),
     re_path(r"^reports/daily/?$", DailyReportView.as_view(), name="daily-report"),
     re_path(r"^reports/daily-async/?$", AsyncDailyReportView.as_view(), name="daily-report-async"),
     re_path(r"^events/stream/?$", EventStreamView.as_view(), name='event-stream'),
